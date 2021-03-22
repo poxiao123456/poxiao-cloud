@@ -1,0 +1,89 @@
+server: 
+  port: 9527
+ 
+spring: 
+  application:
+    name: poxiao-gateway
+  profiles:
+    active: dev
+  cloud:
+    config:
+      fail-fast: true #是否启动快速失败功能，功能开启则优先判断config server是否正常
+      name: ${spring.application.name}
+      profile: ${spring.profiles.active}
+      discovery:
+        enabled: true
+        service-id: poxiao-config
+    gateway:
+      discovery:
+        locator:
+          enabled: true #开启gateway服务注册和发现
+      routes:
+        # 认证中心
+        - id: poxiao-auth
+          uri: lb://poxiao-auth
+          predicates:
+            - Path=/auth/**
+          filters:
+            # 验证码处理
+            - CacheRequest
+            - ImgCodeFilter
+            - StripPrefix=1
+            # requestBody处理
+            # 限流配置
+            - name: RequestRateLimiter
+              args:
+                key-resolver: '#{@remoteAddrKeyResolver}'
+                #允许用户每秒处理多少个请求
+                redis-rate-limiter.replenishRate: 2
+                #令牌桶的容量,允许在一秒钟内完成的最大请求
+                redis-rate-limiter.burstCapacity: 20
+            # 降级配置 必须定义为Hystrix 只能是超时熔断
+            - name: Hystrix
+              args:
+                name: fallbackcmd
+                fallbackUri: 'forward:/fallback'
+        #system 模块
+        - id: ruoyi-system
+          uri: lb://poxiao-system
+          predicates:
+            - Path=/system/**
+          filters:
+            # 限流配置
+            - StripPrefix=1
+            - name: RequestRateLimiter
+              args:
+                key-resolver: '#{@remoteAddrKeyResolver}'
+                redis-rate-limiter.replenishRate: 10
+                redis-rate-limiter.burstCapacity: 20
+            # 降级配置
+            - name: Hystrix
+              args:
+                name: fallbackcmd
+                fallbackUri: 'forward:/fallback'
+
+eureka:
+  client: #客户端注册进eureka服务列表内
+    service-url: 
+       defaultZone: http://eureka7001.com:7001/eureka
+       #defaultZone: http://eureka7001.com:7001/eureka/,http://eureka7002.com:7002/eureka/,http://eureka7003.com:7003/eureka/      
+  instance:
+    instance-id:  ${spring.application.name}:${server.port}
+    prefer-ip-address: true     #访问路径可以显示IP地址
+
+# 暴露监控端点
+management:
+  endpoints:
+    web:
+      exposure:
+        include: '*'
+
+hystrix:
+  command:
+    default:  #default全局有效，service id指定应用有效
+      execution:
+        timeout:
+          enabled: true
+        isolation:
+          thread:
+            timeoutInMilliseconds: 5000 #断路器超时时间，默认1000ms
